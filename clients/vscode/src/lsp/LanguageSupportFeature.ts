@@ -7,6 +7,10 @@ import {
 } from "tabby-agent";
 import { DeclarationParams, SemanticTokensRangeParams } from "vscode-languageclient";
 
+// Weight to prioritize line count over character count when comparing range sizes
+// A range spanning 1 line with many characters is still smaller than a range spanning 2 lines
+const LINE_SIZE_WEIGHT = 10000;
+
 /**
  * Checks if a position is contained within a range
  */
@@ -51,7 +55,7 @@ function findContainingSymbol(
     // Check if the target position is within the symbol's selection range or at its start
     if (isPositionInRange(targetPosition, selectionRange)) {
       const rangeSize =
-        (symbolRange.end.line - symbolRange.start.line) * 10000 +
+        (symbolRange.end.line - symbolRange.start.line) * LINE_SIZE_WEIGHT +
         (symbolRange.end.character - symbolRange.start.character);
       if (rangeSize < bestMatchSize) {
         bestMatchSize = rangeSize;
@@ -125,24 +129,29 @@ export class LanguageSupportFeature implements StaticFeature {
                     item.range.end.character,
                   );
 
-            // Get document symbols to find the full symbol range
-            const documentSymbols = await commands.executeCommand<(DocumentSymbol | SymbolInformation)[]>(
-              "vscode.executeDocumentSymbolProvider",
-              targetUri,
-            );
-
             let finalRange = targetRange;
 
-            if (documentSymbols && documentSymbols.length > 0) {
-              // Find the symbol that contains the definition position
-              const containingSymbolRange = findContainingSymbol(
-                documentSymbols,
-                new Position(targetRange.start.line, targetRange.start.character),
+            // Try to get document symbols to find the full symbol range
+            // If this fails, we fall back to using the original targetRange
+            try {
+              const documentSymbols = await commands.executeCommand<(DocumentSymbol | SymbolInformation)[]>(
+                "vscode.executeDocumentSymbolProvider",
+                targetUri,
               );
 
-              if (containingSymbolRange) {
-                finalRange = containingSymbolRange;
+              if (documentSymbols && documentSymbols.length > 0) {
+                // Find the symbol that contains the definition position
+                const containingSymbolRange = findContainingSymbol(
+                  documentSymbols,
+                  new Position(targetRange.start.line, targetRange.start.character),
+                );
+
+                if (containingSymbolRange) {
+                  finalRange = containingSymbolRange;
+                }
               }
+            } catch {
+              // Failed to get document symbols, fall back to original range
             }
 
             return {
